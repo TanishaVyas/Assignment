@@ -1,1 +1,89 @@
 const express = require("express");
+const router = express.Router();
+const Contact = require("./contact_model");
+
+router.post("/identify", async (req, res) => {
+  const { email, phoneNumber } = req.body;
+  console.log("DOne parrt1");
+  console.log(email, phoneNumber);
+  primaryContactId = 0;
+
+  if (!email && !phoneNumber) {
+    return res
+      .status(400)
+      .json({ error: "At least one of email or phoneNumber is required." });
+  }
+  try {
+    const matchedContacts = await Contact.findContactByEmailOrPhone(
+      email,
+      phoneNumber
+    );
+    console.log("DOne parrt1.1");
+    if (matchedContacts.length <= 0) {
+      console.log("DOne parrt1.2");
+      await Contact.createnewcontact(email, phoneNumber);
+      new_contact = await Contact.findContactByEmailOrPhone(email, phoneNumber);
+      primaryContactId = new_contact.id;
+      console.log("DOne parrt2");
+    } else {
+      console.log("DOne parrt3", matchedContacts);
+      primary_contact = matchedContacts.filter(
+        (c) => c.linkPrecedence === "primary"
+      );
+      Secondary_contact = matchedContacts.filter(
+        (c) => c.linkPrecedence === "secondary"
+      );
+      email_of_matched_contact = matchedContacts.find((c) => c.email === email);
+      phoneNumber_of_matched_contact = matchedContacts.find(
+        (c) => c.phoneNumber == phoneNumber
+      );
+      console.log(primary_contact);
+      console.log(Secondary_contact);
+      console.log(email_of_matched_contact);
+      console.log(phoneNumber_of_matched_contact);
+      const primaryContact =
+        email_of_matched_contact || phoneNumber_of_matched_contact;
+      primaryContactId =
+        primaryContact.linkPrecedence === "primary"
+          ? primaryContact.id
+          : primaryContact.linkedId;
+
+      const isNewEmail = email && !email_of_matched_contact;
+      const isNewPhone = phoneNumber && !phoneNumber_of_matched_contact;
+      console.log("primaryContactId", primaryContactId);
+      if (isNewEmail || isNewPhone) {
+        await Contact.create_secondary_Contact({
+          email: email || null,
+          phoneNumber: phoneNumber || null,
+          linkedId: primaryContactId,
+          linkPrecedence: "secondary",
+        });
+      }
+    }
+    console.log("time to find all return values");
+    const allContacts = await Contact.findAllLinkedContacts(primaryContactId);
+    const emails = [
+      ...new Set(allContacts.map((c) => c.email).filter(Boolean)),
+    ];
+    const phoneNumbers = [
+      ...new Set(allContacts.map((c) => c.phoneNumber).filter(Boolean)),
+    ];
+    const secondaryContactIds = allContacts
+      .filter((c) => c.linkPrecedence === "secondary")
+      .map((c) => c.id);
+
+    return res.json({
+      contact: {
+        primaryContactId,
+        emails,
+        phoneNumbers,
+        secondaryContactIds,
+      },
+    });
+  } catch (err) {
+    console.error("Error in /identify:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+module.exports = router;

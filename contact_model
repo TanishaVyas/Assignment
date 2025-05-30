@@ -1,0 +1,58 @@
+const db = require("./db.js");
+
+const findContactByEmailOrPhone = async (email, phoneNumber) => {
+  const [rows] = await db.execute(
+    `SELECT * FROM contact WHERE (email = ? OR phoneNumber = ?) AND deletedAt IS NULL`,
+    [email || null, phoneNumber || null]
+  );
+  return rows;
+};
+
+const createnewcontact = async (email, phoneNumber) => {
+  const [rows] = await db.execute(
+    `INSERT INTO contact (email, phoneNumber, linkedId, linkPrecedence, createdAt, updatedAt)
+     VALUES (?, ?, NULL, "primary" , NOW(), NOW())`,
+    [email, phoneNumber]
+  );
+};
+
+const create_secondary_Contact = async ({
+  email,
+  phoneNumber,
+  linkedId,
+  linkPrecedence,
+}) => {
+  const safeEmail = email ?? null;
+  const safePhone = phoneNumber ?? null;
+  const safeLinkedId = linkedId ?? null;
+  const safeLinkPrecedence = linkPrecedence ?? null;
+
+  console.log("linkedId", safeLinkedId);
+
+  const [rows] = await db.execute(
+    `INSERT INTO contact (email, phoneNumber, linkedId, linkPrecedence, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, NOW(), NOW())`,
+    [safeEmail, safePhone, safeLinkedId, safeLinkPrecedence]
+  );
+
+  return rows;
+};
+
+const findAllLinkedContacts = async (primaryId) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT * FROM contact WHERE id = ? or linkedId = ?`,
+      [primaryId, primaryId]
+    );
+    return rows;
+  } catch (error) {
+    console.log(error);
+  }
+};
+
+module.exports = {
+  findContactByEmailOrPhone,
+  createnewcontact,
+  create_secondary_Contact,
+  findAllLinkedContacts,
+};
