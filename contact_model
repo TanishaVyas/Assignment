@@ -50,9 +50,17 @@ const findAllLinkedContacts = async (primaryId) => {
   }
 };
 
+const updateToSecondary = async (contactId, newLinkedId) => {
+  await db.execute(
+    `UPDATE contact SET linkPrecedence = 'secondary', linkedId = ?, updatedAt = NOW() WHERE id = ?`,
+    [newLinkedId, contactId]
+  );
+};
+
 module.exports = {
   findContactByEmailOrPhone,
   createnewcontact,
   create_secondary_Contact,
   findAllLinkedContacts,
+  updateToSecondary,
 };
