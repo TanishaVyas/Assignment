@@ -23,8 +23,9 @@ router.post("/identify", async (req, res) => {
       console.log("DOne parrt1.2");
       await Contact.createnewcontact(email, phoneNumber);
       new_contact = await Contact.findContactByEmailOrPhone(email, phoneNumber);
-      primaryContactId = new_contact.id;
-      console.log("DOne parrt2");
+      console.log(new_contact);
+      primaryContactId = new_contact[0].id;
+      console.log("DOne parrt2", primaryContactId);
     } else {
       console.log("DOne parrt3", matchedContacts);
       primary_contact = matchedContacts.filter(
