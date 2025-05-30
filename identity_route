@@ -2,9 +2,87 @@ const express = require("express");
 const router = express.Router();
 const Contact = require("./contact_model");
 
+function extractPrimaryContacts(contacts) {
+  const primaryContactsMap = new Map();
+  contacts.forEach((c) => {
+    if (c.linkPrecedence === "primary") {
+      primaryContactsMap.set(c.id, c);
+    } else if (c.linkedId) {
+      const linkedPrimary = contacts.find((x) => x.id === c.linkedId);
+      if (linkedPrimary && linkedPrimary.linkPrecedence === "primary") {
+        primaryContactsMap.set(linkedPrimary.id, linkedPrimary);
+      }
+    }
+  });
+  return [...primaryContactsMap.values()];
+}
+
+function isNewData(email, phoneNumber, contacts) {
+  const emailMatch = contacts.find((c) => c.email === email);
+  const phoneMatch = contacts.find((c) => c.phoneNumber === phoneNumber);
+  return {
+    isNewEmail: email && !emailMatch,
+    isNewPhone: phoneNumber && !phoneMatch,
+    emailMatch,
+    phoneMatch,
+  };
+}
+
+async function createNewPrimary(email, phoneNumber) {
+  await Contact.createnewcontact(email, phoneNumber);
+  const [newContact] = await Contact.findContactByEmailOrPhone(
+    email,
+    phoneNumber
+  );
+  return newContact.id;
+}
+
+async function convertNewerPrimariesToSecondary(primaryContacts) {
+  primaryContacts.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const oldestPrimary = primaryContacts[0];
+  for (let i = 1; i < primaryContacts.length; i++) {
+    await Contact.updateToSecondary(primaryContacts[i].id, oldestPrimary.id);
+  }
+  return oldestPrimary.id;
+}
+
+async function createSecondaryIfNeeded(
+  isNewEmail,
+  isNewPhone,
+  email,
+  phoneNumber,
+  linkedId
+) {
+  if (isNewEmail || isNewPhone) {
+    await Contact.create_secondary_Contact({
+      email: email || null,
+      phoneNumber: phoneNumber || null,
+      linkedId,
+      linkPrecedence: "secondary",
+    });
+  }
+}
+
+async function buildContactResponse(primaryContactId) {
+  const allContacts = await Contact.findAllLinkedContacts(primaryContactId);
+  const emails = [...new Set(allContacts.map((c) => c.email).filter(Boolean))];
+  const phoneNumbers = [
+    ...new Set(allContacts.map((c) => c.phoneNumber).filter(Boolean)),
+  ];
+  const secondaryContactIds = allContacts
+    .filter((c) => c.linkPrecedence === "secondary")
+    .map((c) => c.id);
+
+  return {
+    primaryContactId,
+    emails,
+    phoneNumbers,
+    secondaryContactIds,
+  };
+}
+
 router.post("/identify", async (req, res) => {
   const { email, phoneNumber } = req.body;
-  console.log("Step 1: Input Received:", email, phoneNumber);
 
   if (!email && !phoneNumber) {
     return res.status(400).json({
@@ -15,47 +93,22 @@ router.post("/identify", async (req, res) => {
   try {
     let primaryContactId = 0;
 
-    // Fetch all matching contacts
     const matchedContacts = await Contact.findContactByEmailOrPhone(
       email,
       phoneNumber
     );
-    console.log("Step 2: Matched Contacts:", matchedContacts);
 
     if (matchedContacts.length === 0) {
-      // Create new contact if no match found
-      await Contact.createnewcontact(email, phoneNumber);
-      const [newContact] = await Contact.findContactByEmailOrPhone(
-        email,
-        phoneNumber
-      );
-      primaryContactId = newContact.id;
-      console.log("Step 3: Created new contact with ID:", primaryContactId);
+      primaryContactId = await createNewPrimary(email, phoneNumber);
     } else {
-      // Step 4: Check if both email and phoneNumber exist but in separate primaries
-      const emailMatch = matchedContacts.find((c) => c.email === email);
-      const phoneMatch = matchedContacts.find(
-        (c) => c.phoneNumber === phoneNumber
+      const { emailMatch, phoneMatch, isNewEmail, isNewPhone } = isNewData(
+        email,
+        phoneNumber,
+        matchedContacts
       );
 
-      // Extract all primary contacts (not duplicates)
-      const primaryContactsMap = new Map();
-      matchedContacts.forEach((c) => {
-        if (c.linkPrecedence === "primary") {
-          primaryContactsMap.set(c.id, c);
-        } else if (c.linkedId) {
-          const linkedPrimary = matchedContacts.find(
-            (x) => x.id === c.linkedId
-          );
-          if (linkedPrimary && linkedPrimary.linkPrecedence === "primary") {
-            primaryContactsMap.set(linkedPrimary.id, linkedPrimary);
-          }
-        }
-      });
-
-      const uniquePrimaryContacts = [...primaryContactsMap.values()];
-
-      // Step 5: If both email and phone match two different primary contacts
+      const primaryContacts = extractPrimaryContacts(matchedContacts);
+      // check if email and phone number have differnet primary contacts
       if (
         email &&
         phoneNumber &&
@@ -65,62 +118,28 @@ router.post("/identify", async (req, res) => {
         emailMatch.linkPrecedence === "primary" &&
         phoneMatch.linkPrecedence === "primary"
       ) {
-        // Sort to get the oldest one
-        uniquePrimaryContacts.sort(
-          (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+        primaryContactId = await convertNewerPrimariesToSecondary(
+          primaryContacts
         );
-        const oldestPrimary = uniquePrimaryContacts[0];
-
-        // Convert all newer primary contacts to secondary
-        for (let i = 1; i < uniquePrimaryContacts.length; i++) {
-          const toConvert = uniquePrimaryContacts[i];
-          await Contact.updateToSecondary(toConvert.id, oldestPrimary.id);
-        }
-
-        // Set the correct primaryContactId
-        primaryContactId = oldestPrimary.id;
       } else {
-        // If only one of email or phone is missing in the match — create secondary
         const baseContact = emailMatch || phoneMatch;
         primaryContactId =
           baseContact.linkPrecedence === "primary"
             ? baseContact.id
             : baseContact.linkedId;
 
-        const isNewEmail = email && !emailMatch;
-        const isNewPhone = phoneNumber && !phoneMatch;
-
-        if (isNewEmail || isNewPhone) {
-          await Contact.create_secondary_Contact({
-            email: email || null,
-            phoneNumber: phoneNumber || null,
-            linkedId: primaryContactId,
-            linkPrecedence: "secondary",
-          });
-        }
+        await createSecondaryIfNeeded(
+          isNewEmail,
+          isNewPhone,
+          email,
+          phoneNumber,
+          primaryContactId
+        );
       }
     }
 
-    // Step 6: Fetch all linked contacts
-    const allContacts = await Contact.findAllLinkedContacts(primaryContactId);
-    const emails = [
-      ...new Set(allContacts.map((c) => c.email).filter(Boolean)),
-    ];
-    const phoneNumbers = [
-      ...new Set(allContacts.map((c) => c.phoneNumber).filter(Boolean)),
-    ];
-    const secondaryContactIds = allContacts
-      .filter((c) => c.linkPrecedence === "secondary")
-      .map((c) => c.id);
-
-    return res.json({
-      contact: {
-        primaryContactId,
-        emails,
-        phoneNumbers,
-        secondaryContactIds,
-      },
-    });
+    const response = await buildContactResponse(primaryContactId);
+    return res.json({ contact: response });
   } catch (err) {
     console.error("Error in /identify:", err);
     res.status(500).json({ error: "Internal server error" });
